@@ -3,80 +3,72 @@ import yt_dlp
 import eyed3
 import json
 import ffmpeg
+from subprocess import run
+from yt_dlp import YoutubeDL
 
-def tag_mp3(mp3_path, metadata_path):
-    file = eyed3.load(mp3_path)
-    if file.tag is None:
-        file.initTag()
+with open('./classical_queries', 'r') as j:
+    contents = json.loads(j.read())
 
-    with open(metadata_path, 'r', encoding='utf-8') as f:
-        data = json.load(f)
+queries = [item['query'] for item in contents]
 
-    file.tag.title = data.get('title')
-    file.tag.artist = data.get('uploader')
-    file.tag.album = data.get('album') or "YouTube"
-    file.tag.genre = "YouTube"
+output_dir = "downloads"
+os.makedirs(output_dir, exist_ok=True)
 
-    if data.get('track_number'):
-        file.tag.track_num = data['track_number']
-    if data.get('upload_date'):
-        year = data['upload_date'][:4]
-        file.tag.recording_date = eyed3.core.Date(int(year))
+max_duration_sec = 600  # cap download length (e.g., 10 minutes)
 
-    file.tag.save()
-
-
-def download_and_tag_youtube(urls, output_dir="downloads"):
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-
-    ydl_opts_eta = {
-        'format': 'bestaudio/best',
-        'outtmpl': os.path.join(output_dir, '%(title)s.%(ext)s'),
-        'forcejson': True,
-        'simulate': True,
-    }
-
-    ydl_opts_audio = {
-        'format': 'bestaudio/best',
-        'outtmpl': os.path.join(output_dir, '%(title)s.%(ext)s'),
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }],
-    }
-
-    for url in urls:
-        try:
-            print(f"getting metadata: {url}")
-            with yt_dlp.YoutubeDL(ydl_opts_meta) as ydl:
-                info = ydl.extract_info(url, download=False)
-
-            title = info.get("title", "unknown")
-            mp3_name = f"{title}.mp3"
-            json_name = f"{title}.json"
-
-            json_path = os.path.join(output_dir, json_name)
-            mp3_path = os.path.join(output_dir, mp3_name)
-
-            with open(json_path, "w", encoding="utf-8") as f:
-                json.dump(info, f, ensure_ascii=False, indent=2)
-
-            print(f"downloading audio: {title}")
-            with yt_dlp.YoutubeDL(ydl_opts_audio) as ydl:
-                ydl.download([url])
-
-            tag_mp3(mp3_path, json_path)
-
-        except Exception as e:
-            print(f"fucked up with {url}: {e}")
-
+# For collecting metadata
+all_metadata = []
 
 if __name__ == "__main__":
-    youtube_urls = [
-        "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-        # something like that
-    ]
     
-    download_and_tag_youtube(youtube_urls)
+    for query in queries:
+
+        safe_name = query.replace("/", "-").replace(":", "-")
+        search_query = f"ytsearch1:{query}"
+
+        safe_title = query.replace("/", "-").replace(":", "-")
+        filename_template = f"{output_dir}/{safe_title}.%(ext)s"
+
+        ydl_opts = {
+        'format': 'bestaudio[ext=m4a]/bestaudio/best',
+        'outtmpl': filename_template,
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'wav',
+            'preferredquality': '192',
+        }],
+        'quiet': True,
+        'no_warnings': True,
+        'noplaylist': True,
+        'default_search': 'ytsearch1',
+        'match_filter': lambda info: (
+            "reject" if info.get("duration", 0) > max_duration_sec else None
+        ),
+        'extract_flat': False,
+        'skip_download': False,
+    }
+
+        try:
+            with YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(query, download=True)
+
+            metadata = {
+                "query": query,
+                "title": info.get("title"),
+                "uploader": info.get("uploader"),
+                "duration": info.get("duration"),
+                "upload_date": info.get("upload_date"),
+                "like_count": info.get("like_count"),
+                "filepath": f"{output_dir}/{safe_title}.wav"
+            }
+            all_metadata.append(metadata)
+
+            print(f"downloaded: {metadata['title']}")
+
+        except Exception as e:
+            print(f"failed for: {query} — {e}")
+
+with open(f"{output_dir}/metadata.json", "w") as f:
+    json.dump(all_metadata, f, indent=2)
+
+print(f"Metadata saved to {output_dir}/metadata.json")
